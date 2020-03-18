@@ -71,6 +71,10 @@ class IntegrationBase
                             Eigen::Vector3d &result_linearized_ba, Eigen::Vector3d &result_linearized_bg, bool update_jacobian)
     {
         //ROS_INFO("midpoint integration");
+        // 这里加速度acc没有没有减掉重力g, 跟其它地方代码的预积分不一样。 
+        // 见https://blog.csdn.net/weixin_44580210/article/details/93377806 这里的预积分是公式5，包含重力g.
+        // 因为公式3中已经统一把重力g减掉了，两部分加到一起以后就消掉了重力g. 
+        // 参见 this::evaluate, sum_dt把预积分所有的dt累计起来，一起消掉了1/2*g*g*sum_dt
         Vector3d un_acc_0 = delta_q * (_acc_0 - linearized_ba);
         Vector3d un_gyr = 0.5 * (_gyr_0 + _gyr_1) - linearized_bg;
         result_delta_q = delta_q * Quaterniond(1, un_gyr(0) * _dt / 2, un_gyr(1) * _dt / 2, un_gyr(2) * _dt / 2);
