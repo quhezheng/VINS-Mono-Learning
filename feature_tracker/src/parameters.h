@@ -9,6 +9,7 @@ const int NUM_OF_CAM = 1;//相机的个数
 
 
 extern std::string IMAGE_TOPIC;//图像的ROS TOPIC
+extern bool JPEG_STREAM; //图像TOPIC里面是jpeg流 而不是标准ros image
 extern std::string IMU_TOPIC;//IMU的ROS TOPIC
 extern std::string FISHEYE_MASK;//鱼眼相机mask图的位置
 extern std::vector<std::string> CAM_NAMES;//相机参数配置文件名

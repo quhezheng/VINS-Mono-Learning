@@ -81,15 +81,28 @@ void img_callback(const sensor_msgs::ImageConstPtr &img_msg)
     //将图像编码8UC1转换为mono8
     if (img_msg->encoding == "8UC1")
     {
-        sensor_msgs::Image img;
-        img.header = img_msg->header;
-        img.height = img_msg->height;
-        img.width = img_msg->width;
-        img.is_bigendian = img_msg->is_bigendian;
-        img.step = img_msg->step;
-        img.data = img_msg->data;
-        img.encoding = "mono8";
-        ptr = cv_bridge::toCvCopy(img, sensor_msgs::image_encodings::MONO8);
+        if (JPEG_STREAM)
+        {
+            cv_bridge::CvImagePtr stream_ptr = cv_bridge::toCvCopy(img_msg, sensor_msgs::image_encodings::TYPE_8UC1);
+            cv_bridge::CvImagePtr bgr8_ptr = boost::make_shared<cv_bridge::CvImage>();
+            bgr8_ptr->image = cv::imdecode(stream_ptr->image, CV_LOAD_IMAGE_COLOR);
+            bgr8_ptr->encoding = sensor_msgs::image_encodings::BGR8;
+            bgr8_ptr->header = stream_ptr->header;
+            cv::flip(bgr8_ptr->image, bgr8_ptr->image, 1);
+            ptr = cv_bridge::cvtColor(bgr8_ptr, sensor_msgs::image_encodings::MONO8);
+        }
+        else
+        {
+            sensor_msgs::Image img;
+            img.header = img_msg->header;
+            img.height = img_msg->height;
+            img.width = img_msg->width;
+            img.is_bigendian = img_msg->is_bigendian;
+            img.step = img_msg->step;
+            img.data = img_msg->data;
+            img.encoding = "mono8";
+            ptr = cv_bridge::toCvCopy(img, sensor_msgs::image_encodings::MONO8);
+        }
     }
     else
         ptr = cv_bridge::toCvCopy(img_msg, sensor_msgs::image_encodings::MONO8);

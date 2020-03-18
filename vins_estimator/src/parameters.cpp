@@ -9,7 +9,7 @@ std::vector<Eigen::Matrix3d> RIC;
 std::vector<Eigen::Vector3d> TIC;
 
 Eigen::Vector3d G{0.0, 0.0, 9.8};
-
+double CONST_G;
 double BIAS_ACC_THRESHOLD;
 double BIAS_GYR_THRESHOLD;
 double SOLVER_TIME;
@@ -20,6 +20,7 @@ int ROLLING_SHUTTER;
 std::string EX_CALIB_RESULT_PATH;
 std::string VINS_RESULT_PATH;
 std::string IMU_TOPIC;
+bool ACC_G_QUANTIFICATION;
 double ROW, COL;
 double TD, TR;
 
@@ -50,6 +51,9 @@ void readParameters(ros::NodeHandle &n)
     }
 
     fsSettings["imu_topic"] >> IMU_TOPIC;
+    ACC_G_QUANTIFICATION = false;
+    if (!fsSettings["acc_g_quan"].isNone ())        
+        fsSettings["acc_g_quan"] >> ACC_G_QUANTIFICATION;
 
     SOLVER_TIME = fsSettings["max_solver_time"];
     NUM_ITERATIONS = fsSettings["max_num_iterations"];
@@ -67,7 +71,7 @@ void readParameters(ros::NodeHandle &n)
     ACC_W = fsSettings["acc_w"];
     GYR_N = fsSettings["gyr_n"];
     GYR_W = fsSettings["gyr_w"];
-    G.z() = fsSettings["g_norm"];
+    G.z() = CONST_G = fsSettings["g_norm"];
     ROW = fsSettings["image_height"];
     COL = fsSettings["image_width"];
     ROS_INFO("ROW: %f COL: %f ", ROW, COL);

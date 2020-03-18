@@ -25,6 +25,7 @@ extern double GYR_N, GYR_W;
 extern std::vector<Eigen::Matrix3d> RIC;//从相机到IMU的旋转矩阵
 extern std::vector<Eigen::Vector3d> TIC;//从相机到IMU的平移向量
 extern Eigen::Vector3d G;//重力[0,0,g]
+extern double CONST_G;
 
 extern double BIAS_ACC_THRESHOLD;//Ba阈值
 extern double BIAS_GYR_THRESHOLD;//Ba阈值
@@ -33,6 +34,7 @@ extern int NUM_ITERATIONS;//最大解算器迭代次数（以保证实时性）
 extern std::string EX_CALIB_RESULT_PATH;//相机与IMU外参的输出路径OUTPUT_PATH + "/extrinsic_parameter.csv"
 extern std::string VINS_RESULT_PATH;//输出路径OUTPUT_PATH + "/vins_result_no_loop.csv"
 extern std::string IMU_TOPIC;//IMU topic名"/imu0"
+extern bool ACC_G_QUANTIFICATION; //IMU加速计单位为g的个数
 extern double TD;//IMU和cam的时间差. unit: s. readed image clock + td = real image clock (IMU clock)
 extern double TR;//卷帘快门每帧时间
 extern int ESTIMATE_TD;//在线校准IMU和camera时间

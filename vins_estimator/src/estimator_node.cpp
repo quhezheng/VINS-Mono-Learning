@@ -164,7 +164,7 @@ getMeasurements()
 }
 
 //imu回调函数，将imu_msg保存到imu_buf，IMU状态递推并发布[P,Q,V,header]
-void imu_callback(const sensor_msgs::ImuConstPtr &imu_msg)
+void imu_callback(const sensor_msgs::ImuPtr &imu_msg)
 {
     //判断时间间隔是否为正
     if (imu_msg->header.stamp.toSec() <= last_imu_t)
@@ -173,7 +173,12 @@ void imu_callback(const sensor_msgs::ImuConstPtr &imu_msg)
         return;
     }
     last_imu_t = imu_msg->header.stamp.toSec();
-
+    if (ACC_G_QUANTIFICATION)
+    {
+        imu_msg->linear_acceleration.x *= CONST_G;
+        imu_msg->linear_acceleration.y *= CONST_G;
+        imu_msg->linear_acceleration.z *= CONST_G;
+    }
 
     m_buf.lock();
     imu_buf.push(imu_msg);
