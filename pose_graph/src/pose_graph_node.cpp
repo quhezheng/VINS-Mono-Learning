@@ -52,6 +52,7 @@ int DEBUG_IMAGE;
 int VISUALIZE_IMU_FORWARD;
 int LOOP_CLOSURE;
 int FAST_RELOCALIZATION;
+bool JPEG_STREAM;
 
 camodocal::CameraPtr m_camera;
 Eigen::Vector3d tic;
@@ -382,15 +383,28 @@ void process()
             cv_bridge::CvImageConstPtr ptr;
             if (image_msg->encoding == "8UC1")
             {
-                sensor_msgs::Image img;
-                img.header = image_msg->header;
-                img.height = image_msg->height;
-                img.width = image_msg->width;
-                img.is_bigendian = image_msg->is_bigendian;
-                img.step = image_msg->step;
-                img.data = image_msg->data;
-                img.encoding = "mono8";
-                ptr = cv_bridge::toCvCopy(img, sensor_msgs::image_encodings::MONO8);
+                if (JPEG_STREAM)
+                {
+                    cv_bridge::CvImagePtr stream_ptr = cv_bridge::toCvCopy(image_msg, sensor_msgs::image_encodings::TYPE_8UC1);
+                    cv_bridge::CvImagePtr bgr8_ptr = boost::make_shared<cv_bridge::CvImage>();
+                    bgr8_ptr->image = cv::imdecode(stream_ptr->image, CV_LOAD_IMAGE_COLOR);
+                    bgr8_ptr->encoding = sensor_msgs::image_encodings::BGR8;
+                    bgr8_ptr->header = stream_ptr->header;
+                    cv::flip(bgr8_ptr->image, bgr8_ptr->image, 1);
+                    ptr = cv_bridge::cvtColor(bgr8_ptr, sensor_msgs::image_encodings::MONO8);
+                }
+                else
+                {
+                    sensor_msgs::Image img;
+                    img.header = image_msg->header;
+                    img.height = image_msg->height;
+                    img.width = image_msg->width;
+                    img.is_bigendian = image_msg->is_bigendian;
+                    img.step = image_msg->step;
+                    img.data = image_msg->data;
+                    img.encoding = "mono8";
+                    ptr = cv_bridge::toCvCopy(img, sensor_msgs::image_encodings::MONO8);
+                }
             }
             else
                 ptr = cv_bridge::toCvCopy(image_msg, sensor_msgs::image_encodings::MONO8);
@@ -525,7 +539,11 @@ int main(int argc, char **argv)
         cout << "BRIEF_PATTERN_FILE" << BRIEF_PATTERN_FILE << endl;
         m_camera = camodocal::CameraFactory::instance()->generateCameraFromYamlFile(config_file.c_str());
 
-        fsSettings["image_topic"] >> IMAGE_TOPIC;        
+        fsSettings["image_topic"] >> IMAGE_TOPIC;
+        
+        JPEG_STREAM = false;
+        if (!fsSettings["jpeg_stream"].isNone())
+            fsSettings["jpeg_stream"] >> JPEG_STREAM;      
         fsSettings["pose_graph_save_path"] >> POSE_GRAPH_SAVE_PATH;
         fsSettings["output_path"] >> VINS_RESULT_PATH;
         fsSettings["save_image"] >> DEBUG_IMAGE;
