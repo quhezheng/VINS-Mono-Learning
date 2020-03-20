@@ -53,12 +53,35 @@ OCAMCamera::Parameters::Parameters()
  , m_E(0.0)
  , m_center_x(0.0)
  , m_center_y(0.0)
+ , SCARAMUZZA_POLY_SIZE(0)
+ , SCARAMUZZA_INV_POLY_SIZE(0)
 {
-    memset(m_poly, 0, sizeof(double) * SCARAMUZZA_POLY_SIZE);
-    memset(m_inv_poly, 0, sizeof(double) * SCARAMUZZA_INV_POLY_SIZE);
+    m_poly = m_inv_poly = NULL;
+//    memset(m_poly, 0, sizeof(double) * SCARAMUZZA_POLY_SIZE);
+//    memset(m_inv_poly, 0, sizeof(double) * SCARAMUZZA_INV_POLY_SIZE);
 }
 
+OCAMCamera::Parameters::Parameters(const OCAMCamera::Parameters & src)
+ : Camera::Parameters(SCARAMUZZA)
+ , m_C(0.0)
+ , m_D(0.0)
+ , m_E(0.0)
+ , m_center_x(0.0)
+ , m_center_y(0.0)
+ , SCARAMUZZA_POLY_SIZE(0)
+ , SCARAMUZZA_INV_POLY_SIZE(0)
+{
+    m_poly = m_inv_poly = NULL;
+    *this = src;
+}
 
+OCAMCamera::Parameters::~Parameters()
+{
+    if (m_poly)
+        delete[] m_poly;
+    if (m_inv_poly)
+        delete[] m_inv_poly;
+}
 
 bool
 OCAMCamera::Parameters::readFromYamlFile(const std::string& filename)
@@ -85,6 +108,11 @@ OCAMCamera::Parameters::readFromYamlFile(const std::string& filename)
     fs["camera_name"] >> m_cameraName;
     m_imageWidth = static_cast<int>(fs["image_width"]);
     m_imageHeight = static_cast<int>(fs["image_height"]);
+
+    SCARAMUZZA_POLY_SIZE = static_cast<int>(fs["poly_parameters_num"]);
+    SCARAMUZZA_INV_POLY_SIZE = static_cast<int>(fs["inv_poly_parameters_num"]);
+    m_poly = new double[SCARAMUZZA_POLY_SIZE];
+    m_inv_poly = new double[SCARAMUZZA_INV_POLY_SIZE];
 
     cv::FileNode n = fs["poly_parameters"];
     for(int i=0; i < SCARAMUZZA_POLY_SIZE; i++)
@@ -152,8 +180,23 @@ OCAMCamera::Parameters::operator=(const OCAMCamera::Parameters& other)
         m_center_x = other.m_center_x;
         m_center_y = other.m_center_y;
 
-        memcpy(m_poly, other.m_poly, sizeof(double) * SCARAMUZZA_POLY_SIZE);
-        memcpy(m_inv_poly, other.m_inv_poly, sizeof(double) * SCARAMUZZA_INV_POLY_SIZE);
+        if (m_poly)
+            delete[] m_poly;
+        if (m_inv_poly)
+            delete[] m_inv_poly;
+        m_poly = m_inv_poly = NULL;
+        SCARAMUZZA_POLY_SIZE = other.SCARAMUZZA_POLY_SIZE;
+        SCARAMUZZA_INV_POLY_SIZE = other.SCARAMUZZA_INV_POLY_SIZE;
+        if (SCARAMUZZA_POLY_SIZE > 0)
+        {
+            m_poly = new double[SCARAMUZZA_POLY_SIZE];
+            memcpy(m_poly, other.m_poly, sizeof(double) * SCARAMUZZA_POLY_SIZE);
+        }
+        if (SCARAMUZZA_INV_POLY_SIZE > 0)
+        {
+            m_inv_poly = new double[SCARAMUZZA_INV_POLY_SIZE];
+            memcpy(m_inv_poly, other.m_inv_poly, sizeof(double) * SCARAMUZZA_INV_POLY_SIZE);
+        }
     }
 
     return *this;
@@ -171,11 +214,11 @@ operator<< (std::ostream& out, const OCAMCamera::Parameters& params)
     out << std::fixed << std::setprecision(10);
 
     out << "Poly Parameters" << std::endl;
-    for(int i=0; i < SCARAMUZZA_POLY_SIZE; i++)
+    for(int i=0; i < params.SCARAMUZZA_POLY_SIZE; i++)
         out << std::string("p") + boost::lexical_cast<std::string>(i) << ": " << params.m_poly[i] << std::endl;
 
     out << "Inverse Poly Parameters" << std::endl;
-    for(int i=0; i < SCARAMUZZA_INV_POLY_SIZE; i++)
+    for(int i=0; i < params.SCARAMUZZA_INV_POLY_SIZE; i++)
         out << std::string("p") + boost::lexical_cast<std::string>(i) << ": " << params.m_inv_poly[i] << std::endl;
 
     out << "Affine Parameters" << std::endl;
@@ -439,7 +482,7 @@ OCAMCamera::estimateIntrinsics(const cv::Size& boardSize,
     }
 
     // Second, estimate camera intrinsic parameters and all t3
-    Eigen::MatrixXd A_mat(2 * imagePoints.size() * imagePoints.at(0).size(), SCARAMUZZA_POLY_SIZE-1 + imagePoints.size());
+    Eigen::MatrixXd A_mat(2 * imagePoints.size() * imagePoints.at(0).size(), mParameters.SCARAMUZZA_POLY_SIZE-1 + imagePoints.size());
     Eigen::VectorXd B_vec(2 * imagePoints.size() * imagePoints.at(0).size());
     A_mat.setZero();
     B_vec.setZero();
@@ -475,7 +518,7 @@ OCAMCamera::estimateIntrinsics(const cv::Size& boardSize,
             double D = u * (r31 * X + r32 * Y);
             double rou = std::sqrt(u*u + v*v);
 
-            for(int k=1;k<=SCARAMUZZA_POLY_SIZE-1;++k) {
+            for(int k=1;k<=mParameters.SCARAMUZZA_POLY_SIZE-1;++k) {
                 double pow_rou = 0.0;
                 if (k == 1) {
                     pow_rou = 1.0;
@@ -488,8 +531,8 @@ OCAMCamera::estimateIntrinsics(const cv::Size& boardSize,
                 A_mat(line_index+1, k-1) = C * pow_rou;
             }
             
-            A_mat(line_index+0, SCARAMUZZA_POLY_SIZE-1+i) = -v;
-            A_mat(line_index+1, SCARAMUZZA_POLY_SIZE-1+i) = -u;
+            A_mat(line_index+0, mParameters.SCARAMUZZA_POLY_SIZE-1+i) = -v;
+            A_mat(line_index+1, mParameters.SCARAMUZZA_POLY_SIZE-1+i) = -u;
             B_vec(line_index+0) = B;
             B_vec(line_index+1) = D;
 
@@ -499,19 +542,20 @@ OCAMCamera::estimateIntrinsics(const cv::Size& boardSize,
 
     assert(line_index == static_cast<unsigned int>(A_mat.rows()));
 
-    Eigen::Matrix<double, SCARAMUZZA_POLY_SIZE, 1> poly_coeff;
+//    Eigen::Matrix<double, mParameters.SCARAMUZZA_POLY_SIZE, 1> poly_coeff;
+    Eigen::MatrixXd  poly_coeff(mParameters.SCARAMUZZA_POLY_SIZE, 1);
     // pseudo-inverse for polynomial parameters and all t3s
     {
         Eigen::JacobiSVD<Eigen::MatrixXd> svd(A_mat, Eigen::ComputeThinU | Eigen::ComputeThinV);
 
         Eigen::VectorXd x = svd.solve(B_vec);
 
-        poly_coeff[0] = x(0);
-        poly_coeff[1] = 0.0;
+        poly_coeff(0,0) = x(0);
+        poly_coeff(1,0) = 0.0;
         for(int i=1;i<poly_coeff.size()-1;++i) {
-            poly_coeff[i+1] = x(i);
+            poly_coeff(i+1,0) = x(i);
         }
-        assert(x.size() == static_cast<unsigned int>(SCARAMUZZA_POLY_SIZE-1+TList.size()));
+        assert(x.size() == static_cast<unsigned int>(mParameters.SCARAMUZZA_POLY_SIZE-1+TList.size()));
     }
 
     Parameters params = getParameters();
@@ -524,8 +568,8 @@ OCAMCamera::estimateIntrinsics(const cv::Size& boardSize,
     params.center_x() = params.imageWidth() / 2.0;
     params.center_y() = params.imageHeight() / 2.0;
     
-    for(size_t i=0; i<SCARAMUZZA_POLY_SIZE; ++i) {
-        params.poly(i) = poly_coeff[i];
+    for(size_t i=0; i<mParameters.SCARAMUZZA_POLY_SIZE; ++i) {
+        params.poly(i) = poly_coeff(i,0);
     }
 
     // params.poly(0) = -216.9657476318;
@@ -543,7 +587,7 @@ OCAMCamera::estimateIntrinsics(const cv::Size& boardSize,
             double rou_pow_k = 1.0;
             double z = 0.0;
 
-            for (int k = 0; k < SCARAMUZZA_POLY_SIZE; k++)
+            for (int k = 0; k < mParameters.SCARAMUZZA_POLY_SIZE; k++)
             {
                 z += rou_pow_k * params.poly(k);
                 rou_pow_k *= rou;
@@ -612,7 +656,7 @@ OCAMCamera::liftProjective(const Eigen::Vector2d& p, Eigen::Vector3d& P) const
     double phi_i = 1.0;
     double z = 0.0;
 
-    for (int i = 0; i < SCARAMUZZA_POLY_SIZE; i++)
+    for (int i = 0; i < mParameters.SCARAMUZZA_POLY_SIZE; i++)
     {
         z += phi_i * mParameters.poly(i);
         phi_i *= phi;
@@ -636,7 +680,7 @@ OCAMCamera::spaceToPlane(const Eigen::Vector3d& P, Eigen::Vector2d& p) const
     double rho = 0.0;
     double theta_i = 1.0;
 
-    for (int i = 0; i < SCARAMUZZA_INV_POLY_SIZE; i++)
+    for (int i = 0; i < mParameters.SCARAMUZZA_INV_POLY_SIZE; i++)
     {
         rho += theta_i * mParameters.inv_poly(i);
         theta_i *= theta;
@@ -760,7 +804,7 @@ OCAMCamera::initUndistortRectifyMap(cv::Mat& map1, cv::Mat& map2,
 int
 OCAMCamera::parameterCount(void) const
 {
-    return SCARAMUZZA_CAMERA_NUM_PARAMS;
+    return (mParameters.SCARAMUZZA_POLY_SIZE + mParameters.SCARAMUZZA_INV_POLY_SIZE + 2 /*center*/ + 3 /*affine*/);
 }
 
 const OCAMCamera::Parameters&
@@ -792,10 +836,10 @@ OCAMCamera::readParameters(const std::vector<double>& parameterVec)
     params.E() = parameterVec.at(2);
     params.center_x() = parameterVec.at(3);
     params.center_y() = parameterVec.at(4);
-    for (int i=0; i < SCARAMUZZA_POLY_SIZE; i++)
+    for (int i=0; i < mParameters.SCARAMUZZA_POLY_SIZE; i++)
         params.poly(i) = parameterVec.at(5+i);
-    for (int i=0; i < SCARAMUZZA_INV_POLY_SIZE; i++)
-        params.inv_poly(i) = parameterVec.at(5 + SCARAMUZZA_POLY_SIZE + i);
+    for (int i=0; i < mParameters.SCARAMUZZA_INV_POLY_SIZE; i++)
+        params.inv_poly(i) = parameterVec.at(5 + mParameters.SCARAMUZZA_POLY_SIZE + i);
 
     setParameters(params);
 }
@@ -809,10 +853,10 @@ OCAMCamera::writeParameters(std::vector<double>& parameterVec) const
     parameterVec.at(2) = mParameters.E();
     parameterVec.at(3) = mParameters.center_x();
     parameterVec.at(4) = mParameters.center_y();
-    for (int i=0; i < SCARAMUZZA_POLY_SIZE; i++)
+    for (int i=0; i < mParameters.SCARAMUZZA_POLY_SIZE; i++)
         parameterVec.at(5+i) = mParameters.poly(i);
-    for (int i=0; i < SCARAMUZZA_INV_POLY_SIZE; i++)
-        parameterVec.at(5 + SCARAMUZZA_POLY_SIZE + i) = mParameters.inv_poly(i);
+    for (int i=0; i < mParameters.SCARAMUZZA_INV_POLY_SIZE; i++)
+        parameterVec.at(5 + mParameters.SCARAMUZZA_POLY_SIZE + i) = mParameters.inv_poly(i);
 }
 
 void
@@ -828,6 +872,26 @@ OCAMCamera::parametersToString(void) const
     oss << mParameters;
 
     return oss.str();
+}
+
+double OCAMCamera::computeErrorMultiplier(){
+  Eigen::Vector3d vector1;
+  liftSphere( Eigen::Vector2d(0.5 * mParameters.imageWidth(), 0.5 * mParameters.imageHeight()),  vector1);
+  Eigen::Vector3d vector2;
+  liftSphere( Eigen::Vector2d(0.5 * mParameters.imageWidth() + 1, 0.5 * mParameters.imageHeight()), vector2 );
+
+  double cosTheta1 = vector1.dot(vector2);
+
+  /*double factor1 = 0.5 / ( 1 - vector1.dot(vector2) );*/
+
+  liftSphere(Eigen::Vector2d(mParameters.imageWidth(), 0.5 * mParameters.imageHeight()), vector1);
+  liftSphere(Eigen::Vector2d(-1 + (double) mParameters.imageWidth() , 0.5 * mParameters.imageHeight()), vector2 );
+
+  /*double factor2 = 0.5/( 1 - vector1.dot(vector2) );*/
+  double cosTheta2 = vector1.dot(vector2);
+
+  /*return ( factor2 + factor1 ) * 0.5;*/
+  return (cosTheta1 + cosTheta2) * 0.5;
 }
 
 }

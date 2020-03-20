@@ -10,10 +10,10 @@
 namespace camodocal
 {
 
-#define SCARAMUZZA_POLY_SIZE 5
-#define SCARAMUZZA_INV_POLY_SIZE 20
+//#define SCARAMUZZA_POLY_SIZE 5
+//#define SCARAMUZZA_INV_POLY_SIZE 20
 
-#define SCARAMUZZA_CAMERA_NUM_PARAMS (SCARAMUZZA_POLY_SIZE + SCARAMUZZA_INV_POLY_SIZE + 2 /*center*/ + 3 /*affine*/)
+//#define SCARAMUZZA_CAMERA_NUM_PARAMS (SCARAMUZZA_POLY_SIZE + SCARAMUZZA_INV_POLY_SIZE + 2 /*center*/ + 3 /*affine*/)
 
 /**
  * Scaramuzza Camera (Omnidirectional)
@@ -27,6 +27,8 @@ public:
     {
     public:
         Parameters();
+        Parameters(const Parameters & src);
+        ~Parameters();
 
         double& C(void) { return m_C; }
         double& D(void) { return m_D; }
@@ -55,13 +57,17 @@ public:
         friend std::ostream& operator<< (std::ostream& out, const Parameters& params);
 
     private:
-        double m_poly[SCARAMUZZA_POLY_SIZE];
-        double m_inv_poly[SCARAMUZZA_INV_POLY_SIZE];
+        double* m_poly;
+        double* m_inv_poly;
         double m_C;
         double m_D;
         double m_E;
         double m_center_x;
         double m_center_y;
+
+    public:
+        int SCARAMUZZA_POLY_SIZE;
+        int SCARAMUZZA_INV_POLY_SIZE;
     };
 
     OCAMCamera();
@@ -141,10 +147,13 @@ public:
 
     std::string parametersToString(void) const;
 
+    double computeErrorMultiplier();
+
 private:
     Parameters mParameters;
 
     double m_inv_scale;
+    double errorMultiplier2;
 };
 
 typedef boost::shared_ptr<OCAMCamera> OCAMCameraPtr;
@@ -157,6 +166,8 @@ OCAMCamera::spaceToPlane(const T* const params,
                          const Eigen::Matrix<T, 3, 1>& P,
                          Eigen::Matrix<T, 2, 1>& p)
 {
+    const int SCARAMUZZA_POLY_SIZE = 5;
+    const int SCARAMUZZA_INV_POLY_SIZE = 20;
     T P_c[3];
     {
         T P_w[3];
@@ -258,6 +269,8 @@ OCAMCamera::LiftToSphere(const T* const params,
                           const Eigen::Matrix<T, 2, 1>& p,
                           Eigen::Matrix<T, 3, 1>& P)
 {
+    const int SCARAMUZZA_POLY_SIZE = 5;
+    const int SCARAMUZZA_INV_POLY_SIZE = 20;
     T c = params[0];
     T d = params[1];
     T e = params[2];
@@ -308,6 +321,9 @@ OCAMCamera::LiftToSphere(const T* const params,
 template <typename T>
 void OCAMCamera::SphereToPlane(const T* const params, const Eigen::Matrix<T, 3, 1>& P,
                                Eigen::Matrix<T, 2, 1>& p) {
+                                   
+    const int SCARAMUZZA_POLY_SIZE = 5;
+    const int SCARAMUZZA_INV_POLY_SIZE = 20;
     T P_c[3];
     {
         P_c[0] = T(P(0));

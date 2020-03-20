@@ -3,6 +3,9 @@
 
 #include <opencv2/calib3d/calib3d.hpp>
 
+#define SCARAMUZZA_POLY_SIZE 5
+#define SCARAMUZZA_INV_POLY_SIZE 20
+#define SCARAMUZZA_CAMERA_NUM_PARAMS (SCARAMUZZA_POLY_SIZE + SCARAMUZZA_INV_POLY_SIZE + 2 /*center*/ + 3 /*affine*/)
 namespace camodocal
 {
 
