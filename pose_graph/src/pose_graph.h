@@ -50,19 +50,28 @@ public:
 	nav_msgs::Path path[10];
 	nav_msgs::Path base_path;
 	CameraPoseVisualization* posegraph_visualization;
+	void savePaseGraphJson();
 	void savePoseGraph();
 	void loadPoseGraph();
 	void publish();
 
-	// vio ----> cur(闭环后的)
+	// vio ----> cur(闭环后的) (KeyFrame::updatePose)
+	// 最近的一次回环中关键帧vio坐标系到世界坐标系的转换，后面新来的关键帧也要应用该变换换转换到世界坐标系上
 	Vector3d t_drift;
 	double yaw_drift;
 	Matrix3d r_drift;
 
 	// cur sequence frame  ---->  world frame( base sequence or first sequence)
+	// 当前sequence坐标系的VIO位姿  ---->  世界坐标系下的VIO位姿 (KeyFrame::updateVioPose).
+	// 这个转换关系在发现新的sequence并找到相对应的前sequence回环点时计算完成(addKeyFrame)，保存下来转换该sequence后面所有的由estimator发来的VIO位姿
+	// sequence_loop 记录了每个sequence是否已经计算出来这个位姿转换关系. 
+	// 下面两个变量代表的转换关系就是sequence_loop中最后一个为true的sequence和世界坐标系的转换
 	Vector3d w_t_vio;
 	Matrix3d w_r_vio;
 
+	// estimator发来的VIO位姿，要经过两步变换才能变换到世界坐标系
+	// 1. 应用 [w_r_vio, w_t_vio] 把不同sequence的VIO坐标转换到世界VIO坐标（没有发生seq切换则为单位变换)
+	// 2. 应用 [r_drift, t_drift] 把世界VIO坐标转换到闭环后的世界坐标系（没有发生闭环则为单位变换)
 
 private:
 	int detectLoop(KeyFrame* keyframe, int frame_index);
@@ -78,8 +87,8 @@ private:
 	std::queue<int> optimize_buf;
 
 	int global_index;
-	int sequence_cnt;
-	vector<bool> sequence_loop;
+	int sequence_cnt;	 //当前正在处理的关键帧序列组id，序列组id从1开始
+	vector<bool> sequence_loop; //记录每组关键帧序列组是否已经在统一到全局图的世界坐标系下了
 	map<int, cv::Mat> image_pool;
 	int earliest_loop_index;
 	int base_sequence;
@@ -169,9 +178,11 @@ struct FourDOFError
 	FourDOFError(double t_x, double t_y, double t_z, double relative_yaw, double pitch_i, double roll_i)
 				  :t_x(t_x), t_y(t_y), t_z(t_z), relative_yaw(relative_yaw), pitch_i(pitch_i), roll_i(roll_i){}
 
+	// 迭代优化的变量是在vio坐标系下的坐标和旋转，而构造函数传入的目标值是 i 坐标系下 j 的坐标和旋转
 	template <typename T>
 	bool operator()(const T* const yaw_i, const T* ti, const T* yaw_j, const T* tj, T* residuals) const
 	{
+		// voi坐标系下 j 相对 i 的坐标偏移
 		T t_w_ij[3];
 		t_w_ij[0] = tj[0] - ti[0];
 		t_w_ij[1] = tj[1] - ti[1];
@@ -184,6 +195,7 @@ struct FourDOFError
 		T i_R_w[9];
 		RotationMatrixTranspose(w_R_i, i_R_w);
 		// rotation matrix rotate point
+		// 转换到 i 坐标系下 j 的坐标
 		T t_i_ij[3];
 		RotationMatrixRotatePoint(i_R_w, t_w_ij, t_i_ij);
 
@@ -203,7 +215,7 @@ struct FourDOFError
 	          	new FourDOFError(t_x, t_y, t_z, relative_yaw, pitch_i, roll_i)));
 	}
 
-	double t_x, t_y, t_z;
+	double t_x, t_y, t_z;	// voi中 j相对i的坐标 t_i_j
 	double relative_yaw, pitch_i, roll_i;
 
 };
@@ -212,7 +224,7 @@ struct FourDOFWeightError
 {
 	FourDOFWeightError(double t_x, double t_y, double t_z, double relative_yaw, double pitch_i, double roll_i)
 				  :t_x(t_x), t_y(t_y), t_z(t_z), relative_yaw(relative_yaw), pitch_i(pitch_i), roll_i(roll_i){
-				  	weight = 1;
+				  	weight = 5;
 				  }
 
 	template <typename T>

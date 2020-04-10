@@ -112,6 +112,7 @@ void image_callback(const sensor_msgs::ImageConstPtr &image_msg)
     if (last_image_time == -1)
         last_image_time = image_msg->header.stamp.toSec();
     //若新到达的图像时间已超过上一帧图像时间1s或小于上一帧，则是新的图像序列
+    //新旧图像序列坐标系可能不统一有飘动偏差，会在 PoseGraph::addKeyFrame()找到回环帧时修正计算出两个序列的转换关系
     else if (image_msg->header.stamp.toSec() - last_image_time > 1.0 || image_msg->header.stamp.toSec() < last_image_time)
     {
         ROS_WARN("image discontinue! detect a new sequence!");
@@ -380,7 +381,7 @@ void process()
                 skip_cnt = 0;
             }
 
-            cv_bridge::CvImageConstPtr ptr;
+            cv_bridge::CvImagePtr ptr;
             if (image_msg->encoding == "8UC1")
             {
                 if (JPEG_STREAM)
@@ -409,7 +410,7 @@ void process()
             else
                 ptr = cv_bridge::toCvCopy(image_msg, sensor_msgs::image_encodings::MONO8);
             
-            cv::Mat image = ptr->image;
+            cv::Mat & image = ptr->image;
 
             // build keyframe
             Vector3d T = Vector3d(pose_msg->pose.pose.position.x,
@@ -449,8 +450,10 @@ void process()
 
                     //printf("u %f, v %f \n", p_2d_uv.x, p_2d_uv.y);
                 }
-
-                KeyFrame* keyframe = new KeyFrame(pose_msg->header.stamp.toSec(), frame_index, T, R, image,
+                //std::cout << std::setprecision(15);
+                //std::cout << "KeyFrame image@" << image_msg->header.stamp.toSec() << " pose@" << pose_msg->header.stamp.toSec() << std::endl;
+                //std::cout << "KeyFrame image@" << image_msg->header.seq << " pose@" << pose_msg->header.seq << std::endl;
+                KeyFrame* keyframe = new KeyFrame(image_msg->header, frame_index, T, R, image,
                                    point_3d, point_2d_uv, point_2d_normal, point_id, sequence);   
                 m_process.lock();
 
@@ -478,10 +481,13 @@ void command()
     {
         //按s保存位姿图并关闭程序
         char c = getchar();
-        if (c == 's')
+        if (c == 's' || c == 'j')
         {
             m_process.lock();
-            posegraph.savePoseGraph();
+            if (c == 's')
+                posegraph.savePoseGraph();
+            else if (c == 'j')
+                posegraph.savePaseGraphJson();
             m_process.unlock();
             printf("save pose graph finish\nyou can set 'load_previous_pose_graph' to 1 in the config file to reuse it next time\n");
             printf("program shutting down...\n");

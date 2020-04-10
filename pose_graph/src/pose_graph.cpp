@@ -1,5 +1,6 @@
 #include "pose_graph.h"
-
+#include <sys/stat.h>
+#include <unistd.h>
 PoseGraph::PoseGraph()
 {
     posegraph_visualization = new CameraPoseVisualization(1.0, 0.0, 1.0, 1.0);
@@ -106,6 +107,7 @@ void PoseGraph::addKeyFrame(KeyFrame* cur_kf, bool flag_detect_loop)
             cur_kf->getVioPose(vio_P_cur, vio_R_cur);
 
             //获取当前帧与回环帧的相对位姿relative_q、relative_t
+            //当前帧相对回环帧的位姿+偏移 T_old_cur
             Vector3d relative_t;
             Quaterniond relative_q;
             relative_t = cur_kf->getLoopRelativeT();
@@ -116,6 +118,9 @@ void PoseGraph::addKeyFrame(KeyFrame* cur_kf, bool flag_detect_loop)
             w_R_cur = w_R_old * relative_q;
             
             //回环得到的位姿和VIO位姿之间的偏移量shift_r、shift_t
+            //也是世界坐标系和VIO坐标系之间的转换t_w_vio，用在2种情况：
+            //      1. 不同的sequence坐标系不一致的情况下，后面的seq整体统一到前面seq坐标系下
+            //      2. 同一个坐标系下因为累计误差，同一个点有两个坐标（回环检测递推出另外一个坐标系--世界坐标系下的坐标). 也可以理解成因为累计误差导致产生了两个坐标系，同1
             double shift_yaw;
             Matrix3d shift_r;
             Vector3d shift_t; 
@@ -170,7 +175,7 @@ void PoseGraph::addKeyFrame(KeyFrame* cur_kf, bool flag_detect_loop)
     //发布path[sequence_cnt]
     Quaterniond Q{R};
     geometry_msgs::PoseStamped pose_stamped;
-    pose_stamped.header.stamp = ros::Time(cur_kf->time_stamp);
+    pose_stamped.header.stamp = cur_kf->header.stamp;
     pose_stamped.header.frame_id = "world";
     pose_stamped.pose.position.x = P.x() + VISUALIZATION_SHIFT_X;
     pose_stamped.pose.position.y = P.y() + VISUALIZATION_SHIFT_Y;
@@ -188,7 +193,7 @@ void PoseGraph::addKeyFrame(KeyFrame* cur_kf, bool flag_detect_loop)
         ofstream loop_path_file(VINS_RESULT_PATH, ios::app);
         loop_path_file.setf(ios::fixed, ios::floatfield);
         loop_path_file.precision(0);
-        loop_path_file << cur_kf->time_stamp * 1e9 << ",";
+        loop_path_file << cur_kf->header.stamp.toSec() * 1e9 << ",";
         loop_path_file.precision(5);
         loop_path_file  << P.x() << ","
               << P.y() << ","
@@ -277,7 +282,7 @@ void PoseGraph::loadKeyFrame(KeyFrame* cur_kf, bool flag_detect_loop)
     cur_kf->getPose(P, R);
     Quaterniond Q{R};
     geometry_msgs::PoseStamped pose_stamped;
-    pose_stamped.header.stamp = ros::Time(cur_kf->time_stamp);
+    pose_stamped.header.stamp = cur_kf->header.stamp;
     pose_stamped.header.frame_id = "world";
     pose_stamped.pose.position.x = P.x() + VISUALIZATION_SHIFT_X;
     pose_stamped.pose.position.y = P.y() + VISUALIZATION_SHIFT_Y;
@@ -451,6 +456,8 @@ void PoseGraph::addKeyFrameIntoVoc(KeyFrame* keyframe)
 }
 
 //四自由度位姿图优化
+//首先，全局位姿优化只会优化回环帧之后的关键帧，回环帧自身保持固定，回环帧之间的帧不参与优化。
+//第二，在构造 VIO 位姿约束时，不仅仅构造了相邻两帧之间的位姿约束，而是够造了与前4帧之间的位姿约束。
 void PoseGraph::optimize4DoF()
 {
     while(true)
@@ -526,6 +533,7 @@ void PoseGraph::optimize4DoF()
                 problem.AddParameterBlock(euler_array[i], 1, angle_local_parameterization);
                 problem.AddParameterBlock(t_array[i], 3);
 
+                // 第一个回环匹配帧和通过load存盘地图的关键帧不再做位姿优化
                 if ((*it)->index == first_looped_index || (*it)->sequence == 0)
                 {   
                     problem.SetParameterBlockConstant(euler_array[i]);
@@ -533,12 +541,17 @@ void PoseGraph::optimize4DoF()
                 }
 
                 //add edge
+                //每个关键帧跟前面4个关键帧相对关系作为约束
                 for (int j = 1; j < 5; j++)
                 {
                   if (i - j >= 0 && sequence_array[i] == sequence_array[i-j])
                   {
                     Vector3d euler_conncected = Utility::R2ypr(q_array[i-j].toRotationMatrix());
+
+                    //先得到同一个vio坐标系下的 i 相对 i-j 的位移 t(voi)_(i-j)_i
                     Vector3d relative_t(t_array[i][0] - t_array[i-j][0], t_array[i][1] - t_array[i-j][1], t_array[i][2] - t_array[i-j][2]);
+                    //算出 i-j 坐标系下，i 相对 i-j 的位移 t(i-j)_(i-j)_i
+                    //t(voi)_(i-j)_i = r_voi_(i-j) * t(i-j)_(i-j)_i  ---->  t(i-j)_(i-j)_i = r_voi_(i-j)^-1 * t(voi)_(i-j)_i
                     relative_t = q_array[i-j].inverse() * relative_t;
                     double relative_yaw = euler_array[i][0] - euler_array[i-j][0];
                     ceres::CostFunction* cost_function = FourDOFError::Create( relative_t.x(), relative_t.y(), relative_t.z(),
@@ -551,6 +564,7 @@ void PoseGraph::optimize4DoF()
                 }
 
                 //add loop edge
+                //当前和历史上的回环匹配对儿也要作为约束参与优化
                 if((*it)->has_loop)
                 {
                     assert((*it)->loop_index >= first_looped_index);
@@ -602,6 +616,7 @@ void PoseGraph::optimize4DoF()
                 i++;
             }
 
+            //最新的回环优化结果相对voi的偏移，后面新来的voi位姿都要apply这个变换
             Vector3d cur_t, vio_t;
             Matrix3d cur_r, vio_r;
             cur_kf->getPose(cur_t, cur_r);
@@ -662,7 +677,7 @@ void PoseGraph::updatePath()
 //        printf("path p: %f, %f, %f\n",  P.x(),  P.z(),  P.y() );
 
         geometry_msgs::PoseStamped pose_stamped;
-        pose_stamped.header.stamp = ros::Time((*it)->time_stamp);
+        pose_stamped.header.stamp = (*it)->header.stamp;
         pose_stamped.header.frame_id = "world";
         pose_stamped.pose.position.x = P.x() + VISUALIZATION_SHIFT_X;
         pose_stamped.pose.position.y = P.y() + VISUALIZATION_SHIFT_Y;
@@ -688,7 +703,7 @@ void PoseGraph::updatePath()
             ofstream loop_path_file(VINS_RESULT_PATH, ios::app);
             loop_path_file.setf(ios::fixed, ios::floatfield);
             loop_path_file.precision(0);
-            loop_path_file << (*it)->time_stamp * 1e9 << ",";
+            loop_path_file << (*it)->header.stamp.toSec() * 1e9 << ",";
             loop_path_file.precision(5);
             loop_path_file  << P.x() << ","
                   << P.y() << ","
@@ -752,6 +767,149 @@ void PoseGraph::updatePath()
     m_keyframelist.unlock();
 }
 
+void PoseGraph::savePaseGraphJson()
+{
+    m_keyframelist.lock();
+    TicToc tmp_t;
+    printf("pose graph path: %s\n",POSE_GRAPH_SAVE_PATH.c_str());
+    printf("pose graph saving... \n");
+    mkdir(POSE_GRAPH_SAVE_PATH.c_str(), S_IRUSR|S_IRGRP|S_IROTH|S_IWUSR|S_IWGRP|S_IWOTH|S_IRWXU|S_IXGRP);
+    string file_path = POSE_GRAPH_SAVE_PATH + "pose_graph.json";
+    std::ofstream json_file(file_path, std::ios::out|std::ios::trunc);
+    json_file << std::setprecision(15);
+    json_file << "[" << endl;
+    list<KeyFrame*>::iterator it;
+    for (it = keyframelist.begin(); it != keyframelist.end(); it++)
+    {
+        Quaterniond VIO_Q{(*it)->vio_R_w_i};        
+        Quaterniond PG_Q{(*it)->R_w_i};
+        const Vector3d & PG_T = (*it)->T_w_i;
+        const Vector3d VIO_T = (*it)->vio_T_w_i;
+        const std_msgs::Header & header = (*it)->header;
+        const vector<cv::KeyPoint> &keypoints = (*it)->keypoints;
+        const vector<cv::KeyPoint> &keypoints_norm = (*it)->keypoints_norm;
+        const vector<BRIEF::bitset> &brief_descriptors = (*it)->brief_descriptors;
+        const vector<cv::Point3f> &tracking_point_3d = (*it)->point_3d;
+	    const vector<cv::Point2f> &tracking_point_2d_uv = (*it)->point_2d_uv;
+	    const vector<cv::Point2f> &tracking_point_2d_norm = (*it)->point_2d_norm;
+        const vector<BRIEF::bitset> &tracking_brief_descriptors = (*it)->window_brief_descriptors;
+	    const vector<double> &tracking_point_id = (*it)->point_id;
+        auto nKP = keypoints.size();
+        auto nTKP = tracking_point_2d_uv.size();
+        std::string brief_path = to_string(header.seq) + "_briefdes.dat";
+        std::string keypoints_path = to_string(header.seq) + "_keypoints.json";
+        std::string tracking_brief_path = to_string(header.seq) + "_tracking_briefdes.dat";
+        std::string tracking_keypoints_path = to_string(header.seq) + "_tracking_keypoints.json";
+        json_file << "  {" << endl;
+        json_file << "     \"image_id\": " << header.seq << "," << endl;
+        json_file << "     \"stamp\": " << header.stamp.toSec() << "," << endl;
+        json_file << "     \"index\": " << (*it)->index << "," << endl;
+        json_file << "     \"x\": " << PG_T.x() << "," << endl;
+        json_file << "     \"y\": " << PG_T.y() << "," << endl;
+        json_file << "     \"z\": " << PG_T.z() << "," << endl;
+        json_file << "     \"qw\": " << PG_Q.w() << "," << endl;
+        json_file << "     \"qx\": " << PG_Q.x() << "," << endl;
+        json_file << "     \"qy\": " << PG_Q.y() << "," << endl;
+        json_file << "     \"qz\": " << PG_Q.z() << "," << endl;
+        json_file << "     \"vio_x\": " << VIO_T.x() << "," << endl;
+        json_file << "     \"vio_y\": " << VIO_T.y() << "," << endl;
+        json_file << "     \"vio_z\": " << VIO_T.z() << "," << endl;
+        json_file << "     \"vio_qw\": " << VIO_Q.w() << "," << endl;
+        json_file << "     \"vio_qx\": " << VIO_Q.x() << "," << endl;
+        json_file << "     \"vio_qy\": " << VIO_Q.y() << "," << endl;
+        json_file << "     \"vio_qz\": " << VIO_Q.z() << "," << endl;
+        json_file << "     \"loop_index\": " << (*it)->loop_index << "," << endl;
+        if ((*it)->loop_index >= 0)
+        {
+            json_file << "     \"loop_info\": [";
+            for (int i = 0; i < 7; i++)
+                json_file << (*it)->loop_info(i) << ",";
+            json_file << (*it)->loop_info(7) << "]," << endl;
+        }
+        json_file << "     \"kp_size\":" << nKP << "," << endl;
+        json_file << "     \"keypoints\": \"" << keypoints_path << "\"," << endl;
+        json_file << "     \"briefdes\": \"" << brief_path << "\"," << endl;
+        json_file << "     \"tracking_kp_size\":" << nTKP << "," << endl;
+        json_file << "     \"tracking_keypoints\": \"" << tracking_keypoints_path << "\"," << endl;
+        json_file << "     \"tracking_briefdes\": \"" << tracking_brief_path << "\"" << endl;
+        /*
+        json_file << "     \"keypoints\":" << endl;        
+        json_file << "       [" << endl;
+        for (size_t i = 0; i < nKP; i++)
+        {
+            const cv::KeyPoint & kp = keypoints[i];
+            const cv::KeyPoint & kp_nor = keypoints_norm[i];
+            std::string sBrefBits;
+            boost::to_string(brief_descriptors[i], sBrefBits);            
+            json_file << "         {" << endl;
+            json_file << "           \"u\":" << (int)kp.pt.x << ", \"v\":" << (int)kp.pt.y << ", \"rx\":" << kp_nor.pt.x << ", \"ry\":" << kp_nor.pt.y << "," << endl;
+            json_file << "           \"briefdes\":\"" << sBrefBits << "\"" << endl;
+            json_file << "         }";
+            if (i < (nKP-1))
+                json_file << "," << endl;
+            else
+                json_file << endl;            
+        }
+        json_file << "       ]" << endl;
+        */
+        if (std::next(it) == keyframelist.end())
+            json_file << "  }" << endl;
+        else
+            json_file << "  }," << endl;
+
+        // Save keypoints & briefs seperatly
+        {
+            std::ofstream brief_file(POSE_GRAPH_SAVE_PATH + brief_path, std::ios::binary|std::ios::trunc);
+            std::ofstream keypoints_file(POSE_GRAPH_SAVE_PATH + keypoints_path, std::ios::out|std::ios::trunc);
+            keypoints_file << "[" << endl;
+            for (size_t i = 0; i < nKP; i++)
+            {
+                const cv::KeyPoint & kp = keypoints[i];
+                const cv::KeyPoint & kp_nor = keypoints_norm[i];            
+                keypoints_file << " {";
+                keypoints_file << " \"u\":" << (int)kp.pt.x << ", \"v\":" << (int)kp.pt.y << ", \"rx\":" << kp_nor.pt.x << ", \"ry\":" << kp_nor.pt.y;
+                keypoints_file << " }";
+                if (i < (nKP-1))
+                    keypoints_file << "," << endl;
+                else
+                    keypoints_file << endl;
+                brief_file << brief_descriptors[i] << endl;
+            }        
+            keypoints_file << "]";
+            brief_file.close();
+            keypoints_file.close();
+        }
+        {
+            std::ofstream brief_file(POSE_GRAPH_SAVE_PATH + tracking_brief_path, std::ios::binary|std::ios::trunc);
+            std::ofstream keypoints_file(POSE_GRAPH_SAVE_PATH + tracking_keypoints_path, std::ios::out|std::ios::trunc);
+            keypoints_file << "[" << endl;
+            for (size_t i = 0; i < nTKP; i++)
+            {
+                const cv::Point3f & p3 = tracking_point_3d[i];
+                const cv::Point2f & p2 = tracking_point_2d_uv[i];
+                const cv::Point2f & p_norm = tracking_point_2d_norm[i];
+                int t_id = (int)tracking_point_id[i];            
+                keypoints_file << " {";
+                keypoints_file << " \"id\":" << t_id << ",";
+                keypoints_file << " \"u\":" << (int)p2.x << ", \"v\":" << (int)p2.y << ",";
+                keypoints_file << " \"rx\":" << p_norm.x << ", \"ry\":" << p_norm.y << ",";
+                keypoints_file << " \"x\":" << p3.x << ", \"y\":" << p3.y << ", \"z\":" << p3.z;
+                keypoints_file << " }";
+                if (i < (nTKP-1))
+                    keypoints_file << "," << endl;
+                else
+                    keypoints_file << endl;
+                brief_file << tracking_brief_descriptors[i] << endl;
+            }        
+            keypoints_file << "]";
+            brief_file.close();
+            keypoints_file.close();
+        }
+    }
+    json_file << "]" << endl;
+    printf("save pose graph time: %f s\n", tmp_t.toc() / 1000);
+    m_keyframelist.unlock();
+}
 //保存位姿图到file_path
 void PoseGraph::savePoseGraph()
 {
@@ -777,7 +935,7 @@ void PoseGraph::savePoseGraph()
         Vector3d VIO_tmp_T = (*it)->vio_T_w_i;
         Vector3d PG_tmp_T = (*it)->T_w_i;
 
-        fprintf (pFile, " %d %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %d %f %f %f %f %f %f %f %f %d\n",(*it)->index, (*it)->time_stamp, 
+        fprintf (pFile, " %d %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %d %f %f %f %f %f %f %f %f %d\n",(*it)->index, (*it)->header.stamp.toSec(), 
                                     VIO_tmp_T.x(), VIO_tmp_T.y(), VIO_tmp_T.z(), 
                                     PG_tmp_T.x(), PG_tmp_T.y(), PG_tmp_T.z(), 
                                     VIO_tmp_Q.w(), VIO_tmp_Q.x(), VIO_tmp_Q.y(), VIO_tmp_Q.z(), 
@@ -917,7 +1075,10 @@ void PoseGraph::loadPoseGraph()
         brief_file.close();
         fclose(keypoints_file);
 
-        KeyFrame* keyframe = new KeyFrame(time_stamp, index, VIO_T, VIO_R, PG_T, PG_R, image, loop_index, loop_info, keypoints, keypoints_norm, brief_descriptors);
+        std_msgs::Header header;
+        header.stamp = ros::Time(time_stamp);
+        header.seq = 0;
+        KeyFrame* keyframe = new KeyFrame(header, index, VIO_T, VIO_R, PG_T, PG_R, image, loop_index, loop_info, keypoints, keypoints_norm, brief_descriptors);
         loadKeyFrame(keyframe, 0);
         if (cnt % 20 == 0)
         {
