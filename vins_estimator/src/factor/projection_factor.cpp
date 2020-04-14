@@ -58,7 +58,8 @@ bool ProjectionFactor::Evaluate(double const *const *parameters, double *residua
 
     residual = sqrt_info * residual;
 
-    //reduce 表示残差residual对fci（pts_camera_j）的导数，同样根据不同的相机模型
+    //reduce 表示残差residual对fcj（pts_camera_j）的导数，同样根据不同的相机模型
+    //数学推导：https://blog.csdn.net/qq_41839222/article/details/93593844  二、视觉约束
     if (jacobians)
     {
         Eigen::Matrix3d Ri = Qi.toRotationMatrix();
@@ -84,7 +85,7 @@ bool ProjectionFactor::Evaluate(double const *const *parameters, double *residua
 
 
         // 残差项的Jacobian
-        // 先求fci对各项的Jacobian，然后用链式法则乘起来
+        // 先求fcj对各项的Jacobian，然后用链式法则乘起来
         // 对第i帧的位姿 pbi,qbi      2X7的矩阵 最后一项是0
         if (jacobians[0]) 
         {

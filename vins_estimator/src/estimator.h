@@ -76,6 +76,9 @@ class Estimator
     Vector3d tic[NUM_OF_CAM];
 
     //窗口中的[P,V,R,Ba,Bg]
+    // Ps, Vs, Rs 都是关键帧在世界坐标系的位置，速度和旋转姿态
+    // 世界坐标系为状态清零后(ClearState)，初始化之前，收到的第一个imu数据时的位置和姿态所确定的，初始化之后需要把这个世界坐标系的Z轴旋转到计算得到的重力g方向上
+    // 世界坐标系: Z轴平行重力g竖直向上，XY方向由第一个imu数据决定
     Vector3d Ps[(WINDOW_SIZE + 1)];
     Vector3d Vs[(WINDOW_SIZE + 1)];
     Matrix3d Rs[(WINDOW_SIZE + 1)];
@@ -123,7 +126,7 @@ class Estimator
     int loop_window_index;
 
     MarginalizationInfo *last_marginalization_info;
-    vector<double *> last_marginalization_parameter_blocks;
+    vector<double *> last_marginalization_parameter_blocks; //上一轮marg后、窗口移动以后marg留下的参数的地址,ceres从这个地址取上一轮保留下来的先验变量
 
     //kay是时间戳，val是图像帧
     //图像帧中保存了图像帧的特征点、时间戳、位姿Rt，预积分对象pre_integration，是否是关键帧。

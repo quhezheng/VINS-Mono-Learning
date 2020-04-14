@@ -109,22 +109,23 @@ void MarginalizationInfo::addResidualBlockInfo(ResidualBlockInfo *residual_block
 }
 
 //计算每个残差，对应的Jacobian，并更新parameter_block_data
+//详见 https://blog.csdn.net/weixin_44580210/article/details/95748091 2.4 第二步
 void MarginalizationInfo::preMarginalize()
 {
-    for (auto it : factors)
+    for (auto it : factors) //在前面的addResidualBlockInfo中会将不同的残差块加入到factor中
     {
-        it->Evaluate();
+        it->Evaluate(); //计算所有状态变量构成的残差和雅克比矩阵
 
         std::vector<int> block_sizes = it->cost_function->parameter_block_sizes();
         for (int i = 0; i < static_cast<int>(block_sizes.size()); i++)
         {
-            long addr = reinterpret_cast<long>(it->parameter_blocks[i]);
-            int size = block_sizes[i];
+            long addr = reinterpret_cast<long>(it->parameter_blocks[i]); //优化变量块的首地址
+            int size = block_sizes[i];  //优化变量块的double变量个数(非字节数)
             if (parameter_block_data.find(addr) == parameter_block_data.end())
             {
                 double *data = new double[size];
-                memcpy(data, it->parameter_blocks[i], sizeof(double) * size);
-                parameter_block_data[addr] = data;
+                memcpy(data, it->parameter_blocks[i], sizeof(double) * size); //重新开辟一块内存
+                parameter_block_data[addr] = data; //通过之前的优化变量的数据的地址和新开辟的内存数据进行关联
             }
         }
     }
@@ -173,10 +174,14 @@ void* ThreadsConstructA(void* threadsstruct)
     return threadsstruct;
 }
 
-//多线程构造先验项舒尔补AX=b的结构，计算Jacobian和残差
+//多线程构造先验项舒尔补AX=b的结构，计算Jacobian和残差. A 就是 Hδx=b 中的H矩阵
+//详见 https://blog.csdn.net/weixin_44580210/article/details/95748091  Ref[1]
+//舒尔补公式 https://blog.csdn.net/heyijia0327/article/details/52822104 Ref[2]
 void MarginalizationInfo::marginalize()
 {
+    // Ref[1] 2.5 第一步
     int pos = 0;
+    //parameter_block_idx目前仅仅有待margin掉的变量，需要放到A矩阵的左上角
     for (auto &it : parameter_block_idx)
     {
         it.second = pos;
@@ -184,7 +189,7 @@ void MarginalizationInfo::marginalize()
     }
 
     m = pos;
-
+    //依次放下要保留的变量块儿在A矩阵中的行列式下标
     for (const auto &it : parameter_block_size)
     {
         if (parameter_block_idx.find(it.first) == parameter_block_idx.end())
@@ -231,7 +236,7 @@ void MarginalizationInfo::marginalize()
     */
     //multi thread
 
-
+    // Ref[1] 2.5 第二步
     TicToc t_thread_summing;
     pthread_t tids[NUM_THREADS];
     ThreadsStruct threadsstruct[NUM_THREADS];
@@ -265,8 +270,7 @@ void MarginalizationInfo::marginalize()
     //ROS_DEBUG("thread summing up costs %f ms", t_thread_summing.toc());
     //ROS_INFO("A diff %f , b diff %f ", (A - tmp_A).sum(), (b - tmp_b).sum());
 
-
-    //TODO
+    // Ref[1] 2.5 第三步
     Eigen::MatrixXd Amm = 0.5 * (A.block(0, 0, m, m) + A.block(0, 0, m, m).transpose());
     Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> saes(Amm);
 
@@ -275,7 +279,7 @@ void MarginalizationInfo::marginalize()
     Eigen::MatrixXd Amm_inv = saes.eigenvectors() * Eigen::VectorXd((saes.eigenvalues().array() > eps).select(saes.eigenvalues().array().inverse(), 0)).asDiagonal() * saes.eigenvectors().transpose();
     //printf("error1: %f\n", (Amm * Amm_inv - Eigen::MatrixXd::Identity(m, m)).sum());
 
-    //舒尔补
+    //舒尔补 Ref[2] 公式9中 c,a,b 的对应关系： rr=c, mm=a, rm=b^t, mr=b
     Eigen::VectorXd bmm = b.segment(0, m);
     Eigen::MatrixXd Amr = A.block(0, m, m, n);
     Eigen::MatrixXd Arm = A.block(m, 0, n, m);
@@ -300,6 +304,9 @@ void MarginalizationInfo::marginalize()
     //      (linearized_jacobians.transpose() * linearized_residuals - b).sum());
 }
 
+//计算marg留下的参数信息，计算结果保存在keep_block_xxx里，留到下一轮优化时作为先验使用
+//返回：窗口向前一格导致所有marg参数的地址对应的内容都要重新赋值，计算窗口移动以后marg留下的参数新的地址
+//     这些地址的顺序
 std::vector<double *> MarginalizationInfo::getParameterBlocks(std::unordered_map<long, double *> &addr_shift)
 {
     std::vector<double *> keep_block_addr;
@@ -344,15 +351,15 @@ bool MarginalizationFactor::Evaluate(double const *const *parameters, double *re
     //printf("jacobian %x\n", reinterpret_cast<long>(jacobians));
     //printf("residual %x\n", reinterpret_cast<long>(residuals));
     //}
-    int n = marginalization_info->n;
-    int m = marginalization_info->m;
+    int n = marginalization_info->n; //marg 保留下来的变量数
+    int m = marginalization_info->m; //marg 掉的变量数
     Eigen::VectorXd dx(n);
     for (int i = 0; i < static_cast<int>(marginalization_info->keep_block_size.size()); i++)
     {
         int size = marginalization_info->keep_block_size[i];
         int idx = marginalization_info->keep_block_idx[i] - m;
-        Eigen::VectorXd x = Eigen::Map<const Eigen::VectorXd>(parameters[i], size);
-        Eigen::VectorXd x0 = Eigen::Map<const Eigen::VectorXd>(marginalization_info->keep_block_data[i], size);
+        Eigen::VectorXd x = Eigen::Map<const Eigen::VectorXd>(parameters[i], size); //ceres求解过程中临时最优解
+        Eigen::VectorXd x0 = Eigen::Map<const Eigen::VectorXd>(marginalization_info->keep_block_data[i], size); //上一轮优化的结果，也是目标约束
         if (size != 7)
             dx.segment(idx, size) = x - x0;
         else
@@ -365,6 +372,8 @@ bool MarginalizationFactor::Evaluate(double const *const *parameters, double *re
             }
         }
     }
+    //linearized_residuals为上一轮最优解对应的残差，dx为相对上一轮最优解的状态变化量。
+    //为了满足边缘化的约束，状态变化量dx引起的残差量应该跟上一轮最优解对应的残差正好抵消，所以这里把两轮的和作为整体残差量处理
     Eigen::Map<Eigen::VectorXd>(residuals, n) = marginalization_info->linearized_residuals + marginalization_info->linearized_jacobians * dx;
     if (jacobians)
     {

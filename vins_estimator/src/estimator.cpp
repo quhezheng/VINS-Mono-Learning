@@ -511,8 +511,10 @@ bool Estimator::visualInitialAlign()
     }
 
     //通过将重力旋转到z轴上，得到世界坐标系与摄像机坐标系c0之间的旋转矩阵rot_diff
-    Matrix3d R0 = Utility::g2R(g);
-    double yaw = Utility::R2ypr(R0 * Rs[0]).x();
+    //也就是把世界坐标轴(Rs[0]的重力方向)旋转到Z轴垂直向上(0,0,1)，这样后面的所有优化出来的姿态都经过相同的旋转统一到该坐标系上
+    //该旋转只需要在(pith,roll)方向旋转，使两个Z轴重合就可以了
+    Matrix3d R0 = Utility::g2R(g); // R0为把imu0的重力g到世界坐标系Z轴的旋转
+    double yaw = Utility::R2ypr(R0 * Rs[0]).x(); // Rs[0]为第0帧图像imu到参考帧的旋转, R0 * Rs[0]为第0帧图像imu的重力跟世界坐标系Z重合时 世界坐标系Z轴到参考帧的旋转
     R0 = Utility::ypr2R(Eigen::Vector3d{-yaw, 0, 0}) * R0;
     g = R0 * g;
 
@@ -981,7 +983,7 @@ void Estimator::optimization()
             for (int i = 0; i < static_cast<int>(last_marginalization_parameter_blocks.size()); i++)
             {
                 if (last_marginalization_parameter_blocks[i] == para_Pose[0] ||
-                    last_marginalization_parameter_blocks[i] == para_SpeedBias[0])
+                    last_marginalization_parameter_blocks[i] == para_SpeedBias[0]) //需要marg掉的优化变量，也就是滑窗内第一个变量
                     drop_set.push_back(i);
             }
             // construct new marginlization_factor
@@ -1016,8 +1018,8 @@ void Estimator::optimization()
 
                 ++feature_index;
 
-                int imu_i = it_per_id.start_frame, imu_j = imu_i - 1;
-                if (imu_i != 0)
+                int imu_i = it_per_id.start_frame, imu_j = imu_i - 1; //这里是从特征点的第一个观察帧开始
+                if (imu_i != 0) //如果第一个观察帧不是第一帧就不进行考虑，因此后面用来构建marg矩阵的都是和第一帧有共视关系的滑窗帧
                     continue;
 
                 Vector3d pts_i = it_per_id.feature_per_frame[0].point;
@@ -1065,10 +1067,12 @@ void Estimator::optimization()
         ROS_DEBUG("marginalization %f ms", t_margin.toc());
 
         //6.调整参数块在下一次窗口中对应的位置（往前移一格），注意这里是指针，后面slideWindow中会赋新值，这里只是提前占座
+        // 窗口向前一格导致所有marg参数的地址对应的内容都要重新赋值，而优化都是以地址为索引的，所以这里要把marg的雅克比和残差地址都修正为移动一格以后的新地址
         std::unordered_map<long, double *> addr_shift;
-        for (int i = 1; i <= WINDOW_SIZE; i++)
+        for (int i = 1; i <= WINDOW_SIZE; i++) //从1开始，因为第一帧的状态不要了
         {
-            addr_shift[reinterpret_cast<long>(para_Pose[i])] = para_Pose[i - 1];
+            //这一步的操作指的是第i的位置存放的的是i-1的内容，这就意味着窗口向前移动了一格
+            addr_shift[reinterpret_cast<long>(para_Pose[i])] = para_Pose[i - 1];//因此para_Pose这些变量都是双指针变量，因此这一步是指针操作
             addr_shift[reinterpret_cast<long>(para_SpeedBias[i])] = para_SpeedBias[i - 1];
         }
         for (int i = 0; i < NUM_OF_CAM; i++)

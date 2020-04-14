@@ -262,8 +262,10 @@ void FeatureTracker::rejectWithF()
 
             Eigen::Vector3d tmp_p;
             //根据不同的相机模型将二维坐标转换到三维坐标
+            //liftProjective（）将图像特征点的坐标映射到空间坐标，里面涉及处理畸变的过程。最后得到俩组特征点的位置
+            //通过这俩组特征点得到基础矩阵，通过基础矩阵剔除一些不好的点
             m_camera->liftProjective(Eigen::Vector2d(cur_pts[i].x, cur_pts[i].y), tmp_p);
-            //转换为归一化像素坐标
+            //转换为归一化像素坐标，在统一的虚拟相机上，方便找出坏点
             tmp_p.x() = FOCAL_LENGTH * tmp_p.x() / tmp_p.z() + COL / 2.0;
             tmp_p.y() = FOCAL_LENGTH * tmp_p.y() / tmp_p.z() + ROW / 2.0;
             un_cur_pts[i] = cv::Point2f(tmp_p.x(), tmp_p.y());

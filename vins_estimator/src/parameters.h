@@ -8,7 +8,7 @@
 #include <opencv2/core/eigen.hpp>
 #include <fstream>
 
-const double FOCAL_LENGTH = 460.0;
+const double FOCAL_LENGTH = 460.0; //虚拟相机的焦距，用于FundamentalMat操作
 const int WINDOW_SIZE = 10;
 const int NUM_OF_CAM = 1;
 const int NUM_OF_F = 1000;
