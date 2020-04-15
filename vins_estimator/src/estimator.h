@@ -126,7 +126,7 @@ class Estimator
     int loop_window_index;
 
     MarginalizationInfo *last_marginalization_info;
-    vector<double *> last_marginalization_parameter_blocks; //上一轮marg后、窗口移动以后marg留下的参数的地址,ceres从这个地址取上一轮保留下来的先验变量
+    vector<double *> last_marginalization_parameter_blocks; //上一轮marg后、窗口移动以后marg留下的优化变量的新地址,ceres从这个地址取上一轮保留下来的待优化变量
 
     //kay是时间戳，val是图像帧
     //图像帧中保存了图像帧的特征点、时间戳、位姿Rt，预积分对象pre_integration，是否是关键帧。

@@ -123,6 +123,7 @@ void MarginalizationInfo::preMarginalize()
             int size = block_sizes[i];  //优化变量块的double变量个数(非字节数)
             if (parameter_block_data.find(addr) == parameter_block_data.end())
             {
+                // 1.3 提到的 "不同残差对同一个状态求雅克比时，线性化点必须一致", 线性化点就是当前的最优解，单独保存到parameter_block_data中
                 double *data = new double[size];
                 memcpy(data, it->parameter_blocks[i], sizeof(double) * size); //重新开辟一块内存
                 parameter_block_data[addr] = data; //通过之前的优化变量的数据的地址和新开辟的内存数据进行关联
@@ -141,6 +142,7 @@ int MarginalizationInfo::globalSize(int size) const
     return size == 6 ? 7 : size;
 }
 
+// 边缘化H矩阵计算 https://www.sohu.com/a/301868161_715754 图13-18
 void* ThreadsConstructA(void* threadsstruct)
 {
     ThreadsStruct* p = ((ThreadsStruct*)threadsstruct);
@@ -177,6 +179,8 @@ void* ThreadsConstructA(void* threadsstruct)
 //多线程构造先验项舒尔补AX=b的结构，计算Jacobian和残差. A 就是 Hδx=b 中的H矩阵
 //详见 https://blog.csdn.net/weixin_44580210/article/details/95748091  Ref[1]
 //舒尔补公式 https://blog.csdn.net/heyijia0327/article/details/52822104 Ref[2]
+//         https://www.sohu.com/a/301868161_715754                    Ref[3]
+//    https://blog.csdn.net/weixin_41394379/article/details/89975386  Ref[4]
 void MarginalizationInfo::marginalize()
 {
     // Ref[1] 2.5 第一步
@@ -237,6 +241,7 @@ void MarginalizationInfo::marginalize()
     //multi thread
 
     // Ref[1] 2.5 第二步
+    // Ref[3] 图13-18
     TicToc t_thread_summing;
     pthread_t tids[NUM_THREADS];
     ThreadsStruct threadsstruct[NUM_THREADS];
@@ -288,6 +293,7 @@ void MarginalizationInfo::marginalize()
     A = Arr - Arm * Amm_inv * Amr;
     b = brr - Arm * Amm_inv * bmm;
 
+    //使用H分解J Ref[4] 附录
     Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> saes2(A);
     Eigen::VectorXd S = Eigen::VectorXd((saes2.eigenvalues().array() > eps).select(saes2.eigenvalues().array(), 0));
     Eigen::VectorXd S_inv = Eigen::VectorXd((saes2.eigenvalues().array() > eps).select(saes2.eigenvalues().array().inverse(), 0));
@@ -295,6 +301,7 @@ void MarginalizationInfo::marginalize()
     Eigen::VectorXd S_sqrt = S.cwiseSqrt();
     Eigen::VectorXd S_inv_sqrt = S_inv.cwiseSqrt();
 
+    // Ref[1] 1.3 提到的 "不同残差对同一个状态求雅克比时，线性化点必须一致", 这里的线性化点就是parameter_block_data中当前求解的最优解
     linearized_jacobians = S_sqrt.asDiagonal() * saes2.eigenvectors().transpose();
     linearized_residuals = S_inv_sqrt.asDiagonal() * saes2.eigenvectors().transpose() * b;
     //std::cout << A << std::endl
@@ -341,6 +348,9 @@ MarginalizationFactor::MarginalizationFactor(MarginalizationInfo* _marginalizati
     set_num_residuals(marginalization_info->n);
 };
 
+//使用ceres在marg时所在的线性化点处对边缘化后的约束优化求解，寻找最优解，使残差为0
+//详见 https://blog.csdn.net/weixin_44580210/article/details/95748091  Ref[1]
+//    https://blog.csdn.net/weixin_41394379/article/details/89975386  Ref[4]
 bool MarginalizationFactor::Evaluate(double const *const *parameters, double *residuals, double **jacobians) const
 {
     //printf("internal addr,%d, %d\n", (int)parameter_block_sizes().size(), num_residuals());
@@ -353,12 +363,12 @@ bool MarginalizationFactor::Evaluate(double const *const *parameters, double *re
     //}
     int n = marginalization_info->n; //marg 保留下来的变量数
     int m = marginalization_info->m; //marg 掉的变量数
-    Eigen::VectorXd dx(n);
+    Eigen::VectorXd dx(n);  //当前轮ceres迭代求解的参数值与线性化点x0​的差值
     for (int i = 0; i < static_cast<int>(marginalization_info->keep_block_size.size()); i++)
     {
         int size = marginalization_info->keep_block_size[i];
         int idx = marginalization_info->keep_block_idx[i] - m;
-        Eigen::VectorXd x = Eigen::Map<const Eigen::VectorXd>(parameters[i], size); //ceres求解过程中临时最优解
+        Eigen::VectorXd x = Eigen::Map<const Eigen::VectorXd>(parameters[i], size); //ceres迭代求解过程中临时最优解
         Eigen::VectorXd x0 = Eigen::Map<const Eigen::VectorXd>(marginalization_info->keep_block_data[i], size); //上一轮优化的结果，也是目标约束
         if (size != 7)
             dx.segment(idx, size) = x - x0;
@@ -372,12 +382,19 @@ bool MarginalizationFactor::Evaluate(double const *const *parameters, double *re
             }
         }
     }
+    // Ref[4] 中的第4步 更新e
+    // Ref[4] 公式推导证明了 H0∗ ​δx = JlT​ Jl​ δx = b∗ = b0∗​ + H0∗ ​dx
+    //        b0∗ = marginalization_info->linearized_jacobians ^t x marginalization_info->linearized_residuals 
+    //        H0∗ = marginalization_info->linearized_jacobians ^t x marginalization_info->linearized_jacobians
+    //        ​dx 当前轮ceres迭代求解的参数值与线性化点x0​的差值
+    //        δx 根据本轮计算的残差，ceres接下来计算出来相对本轮当前迭代状态值x的变化量。x+δx会在下一轮迭代Evaluate()时作为parameters传入
+    // Ref[1] 1.3 提到的 "不同残差对同一个状态求雅克比时，线性化点必须一致", 这里的线性化点就是parameter_block_data中保存的marg时对应的最优解
     //linearized_residuals为上一轮最优解对应的残差，dx为相对上一轮最优解的状态变化量。
     //为了满足边缘化的约束，状态变化量dx引起的残差量应该跟上一轮最优解对应的残差正好抵消，所以这里把两轮的和作为整体残差量处理
     Eigen::Map<Eigen::VectorXd>(residuals, n) = marginalization_info->linearized_residuals + marginalization_info->linearized_jacobians * dx;
     if (jacobians)
     {
-
+        // 这里体现了 "不同残差对同一个状态求雅克比时，线性化点必须一致"，每次迭代雅克比矩阵固定值而不是根据ceres新估计的x状态值处的偏导数重新计算
         for (int i = 0; i < static_cast<int>(marginalization_info->keep_block_size.size()); i++)
         {
             if (jacobians[i])
@@ -390,5 +407,5 @@ bool MarginalizationFactor::Evaluate(double const *const *parameters, double *re
             }
         }
     }
-    return true;
+    return true; //返回后由ceres执行 Ref[4] 中的第5步，计算出新的δx，再代入下一个迭代evaluate(x+δx, ....)
 }
